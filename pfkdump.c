@@ -30,7 +30,9 @@
 #include <sys/queue.h>
 
 #include <net/pfkeyv2.h>
+#ifdef __OpenBSD__
 #include <netinet/ip_ipsp.h>
+#endif
 #include <netdb.h>
 #include <string.h>
 #include <unistd.h>

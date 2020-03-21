@@ -28,7 +28,9 @@
 #include <sys/stat.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#ifdef __OpenBSD__
 #include <netinet/ip_ipsp.h>
+#endif
 #include <arpa/inet.h>
 
 #include <ctype.h>
@@ -44,8 +46,14 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <netdb.h>
+#define _OPENBSD_SOURCE
+#include <stdlib.h>
 
 #include "ipsecctl.h"
+#ifndef __OpenBBSD__
+#define SPI_RESERVED_MIN 1
+#define SPI_RESERVED_MAX 255
+#endif
 
 TAILQ_HEAD(files, file)		 files = TAILQ_HEAD_INITIALIZER(files);
 static struct file {
@@ -175,8 +183,8 @@ const struct ipsec_xf groupxfs[] = {
 
 int			 atoul(char *, u_long *);
 int			 atospi(char *, u_int32_t *);
-u_int8_t		 x2i(unsigned char *);
-struct ipsec_key	*parsekey(unsigned char *, size_t);
+u_int8_t		 x2i(char *);
+struct ipsec_key	*parsekey(char *, size_t);
 struct ipsec_key	*parsekeyfile(char *);
 struct ipsec_addr_wrap	*host(const char *);
 struct ipsec_addr_wrap	*host_v6(const char *, int);
@@ -564,7 +572,7 @@ host_spec	: STRING			{
 		| STRING '/' NUMBER		{
 			char	*buf;
 
-			if (asprintf(&buf, "%s/%lld", $1, $3) == -1)
+			if (asprintf(&buf, "%s/%ld", $1, $3) == -1)
 				err(1, "host: asprintf");
 			free($1);
 			if (($$ = host(buf)) == NULL)	{
@@ -661,11 +669,11 @@ spispec		: SPI STRING			{
 		}
 		| SPI NUMBER			{
 			if ($2 > UINT_MAX || $2 < 0) {
-				yyerror("%lld not a valid spi", $2);
+				yyerror("%ld not a valid spi", $2);
 				YYERROR;
 			}
 			if ($2 >= SPI_RESERVED_MIN && $2 <= SPI_RESERVED_MAX) {
-				yyerror("%lld within reserved spi range", $2);
+				yyerror("%ld within reserved spi range", $2);
 				YYERROR;
 			}
 
@@ -849,8 +857,8 @@ bundlestring	: /* empty */			{ $$ = NULL; }
 		;
 
 keyspec		: STRING			{
-			unsigned char	*hex;
-			unsigned char	*p = strchr($1, ':');
+			char	*hex;
+			char	*p = strchr($1, ':');
 
 			if (p != NULL ) {
 				*p++ = 0;
@@ -869,7 +877,7 @@ keyspec		: STRING			{
 			free($1);
 		}
 		| FILENAME STRING		{
-			unsigned char	*p = strchr($2, ':');
+			char	*p = strchr($2, ':');
 
 			if (p != NULL) {
 				*p++ = 0;
@@ -1054,7 +1062,7 @@ lookup(char *s)
 
 #define MAXPUSHBACK	128
 
-u_char	*parsebuf;
+char	*parsebuf;
 int	 parseindex;
 u_char	 pushback_buffer[MAXPUSHBACK];
 int	 pushback_index = 0;
@@ -1148,8 +1156,8 @@ findeol(void)
 int
 yylex(void)
 {
-	u_char	 buf[8096];
-	u_char	*p, *val;
+	char	 buf[8096];
+	char	*p, *val;
 	int	 quotec, next, c;
 	int	 token;
 
@@ -1510,7 +1518,7 @@ atospi(char *s, u_int32_t *spivalp)
 }
 
 u_int8_t
-x2i(unsigned char *s)
+x2i(char *s)
 {
 	char	ss[3];
 
@@ -1526,7 +1534,7 @@ x2i(unsigned char *s)
 }
 
 struct ipsec_key *
-parsekey(unsigned char *hexkey, size_t len)
+parsekey(char *hexkey, size_t len)
 {
 	struct ipsec_key *key;
 	int		  i;
@@ -1551,7 +1559,7 @@ parsekeyfile(char *filename)
 {
 	struct stat	 sb;
 	int		 fd;
-	unsigned char	*hex;
+	char		*hex;
 
 	if ((fd = open(filename, O_RDONLY)) < 0)
 		err(1, "open %s", filename);
@@ -1872,12 +1880,15 @@ int
 ifa_exists(const char *ifa_name)
 {
 	struct ipsec_addr_wrap	*n;
+#if defined(SIOCGIFGMEMB)
 	struct ifgroupreq	 ifgr;
 	int			 s;
+#endif
 
 	if (iftab == NULL)
 		ifa_load();
 
+#if defined(SIOCGIFGMEMB)
 	/* check whether this is a group */
 	if ((s = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
 		err(1, "ifa_exists: socket");
@@ -1888,6 +1899,7 @@ ifa_exists(const char *ifa_name)
 		return (1);
 	}
 	close(s);
+#endif
 
 	for (n = iftab; n; n = n->next) {
 		if (n->af == AF_LINK && !strncmp(n->name, ifa_name,
@@ -1901,6 +1913,7 @@ ifa_exists(const char *ifa_name)
 struct ipsec_addr_wrap *
 ifa_grouplookup(const char *ifa_name)
 {
+#if defined(SIOCGIFGMEMB)
 	struct ifg_req		*ifg;
 	struct ifgroupreq	 ifgr;
 	int			 s;
@@ -1940,6 +1953,9 @@ ifa_grouplookup(const char *ifa_name)
 	close(s);
 
 	return (h);
+#else
+	return (NULL);
+#endif
 }
 
 struct ipsec_addr_wrap *

@@ -22,7 +22,9 @@
 #include <net/pfkeyv2.h>
 #include <net/route.h>
 #include <netinet/in.h>
+#ifdef __OpenBSD__
 #include <netinet/ip_ipsp.h>
+#endif
 #include <arpa/inet.h>
 
 #include <assert.h>
@@ -57,10 +59,12 @@ void		 ipsecctl_print_flow(struct ipsec_rule *, int);
 void		 ipsecctl_print_sa(struct ipsec_rule *, int);
 void		 ipsecctl_print_sabundle(struct ipsec_rule *, int);
 int		 ipsecctl_flush(int);
+#ifdef __OpenBSD__
 void		 ipsecctl_get_rules(struct ipsecctl *);
 void		 ipsecctl_print_title(char *);
 void		 ipsecctl_show_flows(int);
 void		 ipsecctl_show_sas(int);
+#endif
 int		 ipsecctl_monitor(int);
 void		 usage(void);
 const char	*ipsecctl_lookup_option(char *, const char **);
@@ -596,6 +600,7 @@ ipsecctl_flush(int opts)
 	return (0);
 }
 
+#ifdef __OpenBSD__
 void
 ipsecctl_get_rules(struct ipsecctl *ipsec)
 {
@@ -767,6 +772,7 @@ ipsecctl_show_sas(int opts)
 	free(sad);
 	free(buf);
 }
+#endif
 
 int
 ipsecctl_monitor(int opts)
@@ -880,6 +886,7 @@ main(int argc, char *argv[])
 		if (ipsecctl_rules(rulesopt, opts))
 			error = 1;
 
+#ifdef __OPENBSD__
 	if (showopt != NULL) {
 		switch (*showopt) {
 		case 'f':
@@ -894,6 +901,7 @@ main(int argc, char *argv[])
 			ipsecctl_show_sas(opts);
 		}
 	}
+#endif
 
 	if (opts & IPSECCTL_OPT_MONITOR)
 		if (ipsecctl_monitor(opts))

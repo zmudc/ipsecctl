@@ -56,6 +56,10 @@ int		ike_ipsec_establish(int, struct ipsec_rule *, const char *);
 #define CONF_DFLT_DYNAMIC_DPD_CHECK_INTERVAL	5
 #define CONF_DFLT_DYNAMIC_CHECK_INTERVAL	30
 
+#ifndef __OpenBSD__
+#define HOST_NAME_MAX _POSIX_HOST_NAME_MAX
+#endif
+
 char *ike_id_types[] = {
 	"", "", "IPV4_ADDR", "IPV6_ADDR", "FQDN", "USER_FQDN"
 };

@@ -22,7 +22,9 @@
 #include <sys/uio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#ifdef __OpenBSD__
 #include <netinet/ip_ipsp.h>
+#endif
 #include <net/pfkeyv2.h>
 
 #include <err.h>
