@@ -37,6 +37,7 @@
 
 #include "ipsecctl.h"
 #include "pfkey.h"
+#include "openbsd-compat.h"
 
 #define ROUNDUP(x) (((x) + (PFKEYV2_CHUNK - 1)) & ~(PFKEYV2_CHUNK - 1))
 #define IOV_CNT 20
@@ -54,14 +55,19 @@ static int	pfkey_sa(int, u_int8_t, u_int8_t, u_int32_t,
 		    u_int8_t, u_int16_t,
 		    struct ipsec_transforms *, struct ipsec_key *,
 		    struct ipsec_key *, u_int8_t);
+#ifdef SADB_X_GRPSPIS
 static int	pfkey_sabundle(int, u_int8_t, u_int8_t, u_int8_t,
 		    struct ipsec_addr_wrap *, u_int32_t,
 		    struct ipsec_addr_wrap *, u_int32_t);
+#endif
 static int	pfkey_reply(int, u_int8_t **, ssize_t *);
 int		pfkey_parse(struct sadb_msg *, struct ipsec_rule *);
 int		pfkey_ipsec_flush(void);
 int		pfkey_ipsec_establish(int, struct ipsec_rule *);
 int		pfkey_init(void);
+#ifndef __OpenBSD
+void		freezero(void *ptr, size_t sz);
+#endif
 
 static int
 pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
@@ -71,16 +77,25 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
     struct ipsec_auth *auth, u_int8_t flowtype)
 {
 	struct sadb_msg		 smsg;
-	struct sadb_address	 sa_src, sa_dst, sa_local, sa_peer, sa_smask,
-				 sa_dmask;
+	struct sadb_address	 sa_src, sa_dst;
+#ifdef SADB_X_EXT_SRC_MASK
+	struct sadb_address	sa_smask, sa_dmask;
+#endif
+#ifdef SADB_X_EXT_FLOW_TYPE
 	struct sadb_protocol	 sa_flowtype, sa_protocol;
+#endif
+#ifdef __OpenBSD__
 	struct sadb_ident	*sa_srcid, *sa_dstid;
+	sa_srcid = sa_dstid = NULL;
+	int len;
+#endif
 	struct sockaddr_storage	 ssrc, sdst, slocal, speer, smask, dmask;
+#ifdef __OpenBSD__
+	struct sadb_address	 sa_local, sa_peer;
+#endif
 	struct iovec		 iov[IOV_CNT];
 	ssize_t			 n;
-	int			 iov_cnt, len, ret = 0;
-
-	sa_srcid = sa_dstid = NULL;
+	int			 iov_cnt, ret = 0;
 
 	bzero(&ssrc, sizeof(ssrc));
 	bzero(&smask, sizeof(smask));
@@ -186,6 +201,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	smsg.sadb_msg_type = action;
 	smsg.sadb_msg_satype = satype;
 
+#ifdef SADB_X_EXT_FLOW_TYPE
 	bzero(&sa_flowtype, sizeof(sa_flowtype));
 	sa_flowtype.sadb_protocol_exttype = SADB_X_EXT_FLOW_TYPE;
 	sa_flowtype.sadb_protocol_len = sizeof(sa_flowtype) / 8;
@@ -214,31 +230,39 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 		warnx("unsupported flowtype %d", flowtype);
 		return -1;
 	}
+#endif
 
+#ifdef SADB_X_EXT_PROTOCOL
 	bzero(&sa_protocol, sizeof(sa_protocol));
 	sa_protocol.sadb_protocol_exttype = SADB_X_EXT_PROTOCOL;
 	sa_protocol.sadb_protocol_len = sizeof(sa_protocol) / 8;
 	sa_protocol.sadb_protocol_direction = 0;
 	sa_protocol.sadb_protocol_proto = proto;
+#endif
 
 	bzero(&sa_src, sizeof(sa_src));
 	sa_src.sadb_address_exttype = SADB_X_EXT_SRC_FLOW;
 	sa_src.sadb_address_len = (sizeof(sa_src) + ROUNDUP(ssrc.ss_len)) / 8;
 
+#ifdef SADB_X_EXT_SRC_MASK
 	bzero(&sa_smask, sizeof(sa_smask));
 	sa_smask.sadb_address_exttype = SADB_X_EXT_SRC_MASK;
 	sa_smask.sadb_address_len =
 	    (sizeof(sa_smask) + ROUNDUP(smask.ss_len)) / 8;
+#endif
 
 	bzero(&sa_dst, sizeof(sa_dst));
 	sa_dst.sadb_address_exttype = SADB_X_EXT_DST_FLOW;
 	sa_dst.sadb_address_len = (sizeof(sa_dst) + ROUNDUP(sdst.ss_len)) / 8;
 
+#ifdef SADB_X_EXT_DST_MASK
 	bzero(&sa_dmask, sizeof(sa_dmask));
 	sa_dmask.sadb_address_exttype = SADB_X_EXT_DST_MASK;
 	sa_dmask.sadb_address_len =
 	    (sizeof(sa_dmask) + ROUNDUP(dmask.ss_len)) / 8;
+#endif
 
+#ifdef __OpenBSD__
 	if (local) {
 		bzero(&sa_local, sizeof(sa_local));
 		sa_local.sadb_address_exttype = SADB_EXT_ADDRESS_SRC;
@@ -280,6 +304,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 		strlcpy((char *)(sa_dstid + 1), auth->dstid,
 		    ROUNDUP(strlen(auth->dstid) + 1));
 	}
+#endif
 
 	iov_cnt = 0;
 
@@ -288,12 +313,15 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	iov[iov_cnt].iov_len = sizeof(smsg);
 	iov_cnt++;
 
+#ifdef SADB_X_EXT_FLOW_TYPE
 	/* add flow type */
 	iov[iov_cnt].iov_base = &sa_flowtype;
 	iov[iov_cnt].iov_len = sizeof(sa_flowtype);
 	smsg.sadb_msg_len += sa_flowtype.sadb_protocol_len;
 	iov_cnt++;
+#endif
 
+#ifdef __OpenBSD__
 	/* local ip */
 	if (local) {
 		iov[iov_cnt].iov_base = &sa_local;
@@ -315,6 +343,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 		smsg.sadb_msg_len += sa_peer.sadb_address_len;
 		iov_cnt++;
 	}
+#endif
 
 	/* src addr */
 	iov[iov_cnt].iov_base = &sa_src;
@@ -325,6 +354,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	smsg.sadb_msg_len += sa_src.sadb_address_len;
 	iov_cnt++;
 
+#ifdef SADB_X_EXT_SRC_MASK
 	/* src mask */
 	iov[iov_cnt].iov_base = &sa_smask;
 	iov[iov_cnt].iov_len = sizeof(sa_smask);
@@ -333,6 +363,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	iov[iov_cnt].iov_len = ROUNDUP(smask.ss_len);
 	smsg.sadb_msg_len += sa_smask.sadb_address_len;
 	iov_cnt++;
+#endif
 
 	/* dest addr */
 	iov[iov_cnt].iov_base = &sa_dst;
@@ -343,6 +374,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
 
+#ifdef SADB_X_EXT_DST_MASK
 	/* dst mask */
 	iov[iov_cnt].iov_base = &sa_dmask;
 	iov[iov_cnt].iov_len = sizeof(sa_dmask);
@@ -351,13 +383,17 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 	iov[iov_cnt].iov_len = ROUNDUP(dmask.ss_len);
 	smsg.sadb_msg_len += sa_dmask.sadb_address_len;
 	iov_cnt++;
+#endif
 
+#ifdef SADB_X_EXT_PROTOCOL
 	/* add protocol */
 	iov[iov_cnt].iov_base = &sa_protocol;
 	iov[iov_cnt].iov_len = sizeof(sa_protocol);
 	smsg.sadb_msg_len += sa_protocol.sadb_protocol_len;
 	iov_cnt++;
+#endif
 
+#ifdef __OpenBSD__
 	if (sa_srcid) {
 		/* src identity */
 		iov[iov_cnt].iov_base = sa_srcid;
@@ -373,6 +409,7 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 		iov_cnt++;
 	}
 	len = smsg.sadb_msg_len * 8;
+#endif
 
 	do {
 		n = writev(sd, iov, iov_cnt);
@@ -382,8 +419,10 @@ pfkey_flow(int sd, u_int8_t satype, u_int8_t action, u_int8_t direction,
 		ret = -1;
 	}
 
+#ifdef __OpenBSD__
 	free(sa_srcid);
 	free(sa_dstid);
+#endif
 
 	return ret;
 }
@@ -399,7 +438,9 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 	struct sadb_sa		sa;
 	struct sadb_address	sa_src, sa_dst;
 	struct sadb_key		sa_authkey, sa_enckey;
+#ifdef SADB_X_EXT_UDPENCAP
 	struct sadb_x_udpencap	udpencap;
+#endif
 	struct sockaddr_storage	ssrc, sdst;
 	struct iovec		iov[IOV_CNT];
 	ssize_t			n;
@@ -451,8 +492,10 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 	sa.sadb_sa_spi = htonl(spi);
 	sa.sadb_sa_state = SADB_SASTATE_MATURE;
 
+#ifdef SADB_X_SATYPE_IPIP
 	if (satype != SADB_X_SATYPE_IPIP && tmode == IPSEC_TUNNEL)
 		sa.sadb_sa_flags |= SADB_X_SAFLAGS_TUNNEL;
+#endif
 
 	if (xfs && xfs->authxf) {
 		switch (xfs->authxf->id) {
@@ -510,12 +553,16 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 		case ENCXF_AES_256_GMAC:
 			sa.sadb_sa_encrypt = SADB_X_EALG_AESGMAC;
 			break;
+#ifdef SADB_X_EALG_BLF
 		case ENCXF_BLOWFISH:
 			sa.sadb_sa_encrypt = SADB_X_EALG_BLF;
 			break;
+#endif
+#ifdef SADB_X_EALG_CAST
 		case ENCXF_CAST128:
 			sa.sadb_sa_encrypt = SADB_X_EALG_CAST;
 			break;
+#endif
 		case ENCXF_NULL:
 			sa.sadb_sa_encrypt = SADB_EALG_NULL;
 			break;
@@ -546,17 +593,27 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 	sa_dst.sadb_address_len = (sizeof(sa_dst) + ROUNDUP(sdst.ss_len)) / 8;
 	sa_dst.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
 
+#ifdef SADB_X_EXT_UDPENCAP
 	if (encap) {
 		sa.sadb_sa_flags |= SADB_X_SAFLAGS_UDPENCAP;
 		udpencap.sadb_x_udpencap_exttype = SADB_X_EXT_UDPENCAP;
 		udpencap.sadb_x_udpencap_len = sizeof(udpencap) / 8;
 		udpencap.sadb_x_udpencap_port = htons(dport);
 	}
+#endif
+#ifdef SADB_X_SATYPE_IPIP
 	if (action == SADB_ADD && !authkey && !enckey && satype !=
 	    SADB_X_SATYPE_IPCOMP && satype != SADB_X_SATYPE_IPIP) { /* XXX ENCNULL */
 		warnx("no key specified");
 		return -1;
 	}
+#else
+	if (action == SADB_ADD && !authkey && !enckey && satype !=
+	    SADB_X_SATYPE_IPCOMP) { /* XXX ENCNULL */
+		warnx("no key specified");
+		return -1;
+	}
+#endif
 	if (authkey) {
 		bzero(&sa_authkey, sizeof(sa_authkey));
 		sa_authkey.sadb_key_len = (sizeof(sa_authkey) +
@@ -603,12 +660,14 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 	smsg.sadb_msg_len += sa_dst.sadb_address_len;
 	iov_cnt++;
 
+#ifdef SADB_X_EXT_UDPENCAP
 	if (encap) {
 		iov[iov_cnt].iov_base = &udpencap;
 		iov[iov_cnt].iov_len = sizeof(udpencap);
 		smsg.sadb_msg_len += udpencap.sadb_x_udpencap_len;
 		iov_cnt++;
 	}
+#endif
 	if (authkey) {
 		/* authentication key */
 		iov[iov_cnt].iov_base = &sa_authkey;
@@ -642,6 +701,7 @@ pfkey_sa(int sd, u_int8_t satype, u_int8_t action, u_int32_t spi,
 	return ret;
 }
 
+#ifdef SADB_X_GRPSPIS
 static int
 pfkey_sabundle(int sd, u_int8_t satype, u_int8_t satype2, u_int8_t action,
     struct ipsec_addr_wrap *dst, u_int32_t spi, struct ipsec_addr_wrap *dst2,
@@ -651,7 +711,9 @@ pfkey_sabundle(int sd, u_int8_t satype, u_int8_t satype2, u_int8_t action,
 	struct sadb_sa		sa1, sa2;
 	struct sadb_address	sa_dst, sa_dst2;
 	struct sockaddr_storage	sdst, sdst2;
+#ifdef SADB_X_EXT_PROTOCOL
 	struct sadb_protocol	sa_proto;
+#endif
 	struct iovec		iov[IOV_CNT];
 	ssize_t			n;
 	int			iov_cnt, len, ret = 0;
@@ -713,15 +775,19 @@ pfkey_sabundle(int sd, u_int8_t satype, u_int8_t satype2, u_int8_t action,
 	sa_dst.sadb_address_exttype = SADB_EXT_ADDRESS_DST;
 	sa_dst.sadb_address_len = (sizeof(sa_dst) + ROUNDUP(sdst.ss_len)) / 8;
 
+#ifdef SADB_X_EXT_DST2
 	bzero(&sa_dst2, sizeof(sa_dst2));
 	sa_dst2.sadb_address_exttype = SADB_X_EXT_DST2;
 	sa_dst2.sadb_address_len = (sizeof(sa_dst2) + ROUNDUP(sdst2.ss_len)) / 8;
+#endif
 
+#ifdef SADB_X_EXT_SATYPE2
 	bzero(&sa_proto, sizeof(sa_proto));
 	sa_proto.sadb_protocol_exttype = SADB_X_EXT_SATYPE2;
 	sa_proto.sadb_protocol_len = sizeof(sa_proto) / 8;
 	sa_proto.sadb_protocol_direction = 0;
 	sa_proto.sadb_protocol_proto = satype2;
+#endif
 
 	/* header */
 	iov[iov_cnt].iov_base = &smsg;
@@ -758,11 +824,13 @@ pfkey_sabundle(int sd, u_int8_t satype, u_int8_t satype2, u_int8_t action,
 	smsg.sadb_msg_len += sa_dst2.sadb_address_len;
 	iov_cnt++;
 
+#ifdef SADB_X_EXT_PROTOCOL
 	/* SA type */
 	iov[iov_cnt].iov_base = &sa_proto;
 	iov[iov_cnt].iov_len = sizeof(sa_proto);
 	smsg.sadb_msg_len += sa_proto.sadb_protocol_len;
 	iov_cnt++;
+#endif
 
 	len = smsg.sadb_msg_len * 8;
 	if ((n = writev(sd, iov, iov_cnt)) == -1) {
@@ -775,6 +843,18 @@ pfkey_sabundle(int sd, u_int8_t satype, u_int8_t satype2, u_int8_t action,
 
 	return (ret);
 }
+#endif
+
+#ifndef __OpenBSD__
+void
+freezero(void *ptr, size_t sz)
+{
+	if (ptr) {
+		explicit_memset(ptr, 0, sz);
+		free(ptr);
+	}
+}
+#endif
 
 static int
 pfkey_reply(int sd, u_int8_t **datap, ssize_t *lenp)
@@ -817,11 +897,15 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 {
 	struct sadb_ext		*ext;
 	struct sadb_address	*saddr;
+#ifdef SADB_X_EXT_PROTOCOL
 	struct sadb_protocol	*sproto;
+#endif
 	struct sadb_ident	*sident;
 	struct sockaddr		*sa;
+#ifdef SADB_X_EXT_SRC_MASK
 	struct sockaddr_in	*sa_in;
 	struct sockaddr_in6	*sa_in6;
+#endif
 	int			 len;
 
 	switch (msg->sadb_msg_satype) {
@@ -834,9 +918,11 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 	case SADB_X_SATYPE_IPCOMP:
 		rule->satype = IPSEC_IPCOMP;
 		break;
+#ifdef SADB_X_SATYPE_IPIP
 	case SADB_X_SATYPE_IPIP:
 		rule->satype = IPSEC_IPIP;
 		break;
+#endif
 	default:
 		return (1);
 	}
@@ -940,12 +1026,15 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 			strlcpy(rule->auth->dstid, (char *)(sident + 1), len);
 			break;
 
+#ifdef SADB_X_EXT_PROTOCOL
 		case SADB_X_EXT_PROTOCOL:
 			sproto = (struct sadb_protocol *)ext;
 			if (sproto->sadb_protocol_direction == 0)
 				rule->proto = sproto->sadb_protocol_proto;
 			break;
+#endif
 
+#ifdef SADB_X_EXT_FLOW_TYPE
 		case SADB_X_EXT_FLOW_TYPE:
 			sproto = (struct sadb_protocol *)ext;
 
@@ -983,7 +1072,9 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 				break;
 			}
 			break;
+#endif
 
+#ifdef __OpenBSD
 		case SADB_X_EXT_SRC_FLOW:
 			saddr = (struct sadb_address *)ext;
 			sa = (struct sockaddr *)(saddr + 1);
@@ -1047,8 +1138,9 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 				return (1);
 			}
 			break;
+#endif
 
-
+#ifdef SADB_X_EXT_SRC_MASK
 		case SADB_X_EXT_SRC_MASK:
 			saddr = (struct sadb_address *)ext;
 			sa = (struct sockaddr *)(saddr + 1);
@@ -1105,6 +1197,7 @@ pfkey_parse(struct sadb_msg *msg, struct ipsec_rule *rule)
 				return (1);
 			}
 			break;
+#endif
 
 		default:
 			return (1);
@@ -1118,7 +1211,10 @@ int
 pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 {
 	int		ret;
-	u_int8_t	satype, satype2, direction;
+	u_int8_t	satype, direction;
+#ifdef SADB_X_GRPSPIS
+	u_int8_t	satype2;
+#endif
 
 	if (r->type == RULE_FLOW) {
 		switch (r->satype) {
@@ -1131,13 +1227,16 @@ pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 		case IPSEC_IPCOMP:
 			satype = SADB_X_SATYPE_IPCOMP;
 			break;
+#ifdef SADB_X_SATYPE_IPIP
 		case IPSEC_IPIP:
 			satype = SADB_X_SATYPE_IPIP;
 			break;
+#endif
 		default:
 			return -1;
 		}
 
+#ifdef IPSP_DIRECTION_IN
 		switch (r->direction) {
 		case IPSEC_IN:
 			direction = IPSP_DIRECTION_IN;
@@ -1148,6 +1247,7 @@ pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 		default:
 			return -1;
 		}
+#endif
 
 		switch (action) {
 		case ACTION_ADD:
@@ -1178,9 +1278,11 @@ pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 		case IPSEC_TCPMD5:
 			satype = SADB_X_SATYPE_TCPSIGNATURE;
 			break;
+#ifdef SADB_X_SATYPE_IPIP
 		case IPSEC_IPIP:
 			satype = SADB_X_SATYPE_IPIP;
 			break;
+#endif
 		default:
 			return -1;
 		}
@@ -1211,12 +1313,15 @@ pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 		case IPSEC_TCPMD5:
 			satype = SADB_X_SATYPE_TCPSIGNATURE;
 			break;
+#ifdef SADB_X_SATYPE_IPIP
 		case IPSEC_IPIP:
 			satype = SADB_X_SATYPE_IPIP;
 			break;
+#endif
 		default:
 			return -1;
 		}
+#ifdef SADB_X_GRPSPIS
 		switch (r->proto2) {
 		case IPSEC_AH:
 			satype2 = SADB_SATYPE_AH;
@@ -1236,11 +1341,14 @@ pfkey_ipsec_establish(int action, struct ipsec_rule *r)
 		default:
 			return -1;
 		}
+#endif
 		switch (action) {
 		case ACTION_ADD:
+#ifdef SADB_X_GRPSPIS
 			ret = pfkey_sabundle(fd, satype, satype2,
 			    SADB_X_GRPSPIS, r->dst, r->spi, r->dst2, r->spi2);
 			break;
+#endif
 		case ACTION_DELETE:
 			return 0;
 		default:
